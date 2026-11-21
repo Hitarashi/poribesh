@@ -52,13 +52,13 @@ impl EnvLoader {
         self
     }
 
-    /// Resolves the active environment name from explicit config, `DRUTO_ENV`, `APP_ENV`, or defaults to `"development"`.
+    /// Resolves the active environment name from explicit config, `PORIBESH_ENV`, `APP_ENV`, or defaults to `"development"`.
     pub fn resolve_active_env(&self) -> String {
         if let Some(env_name) = &self.active_env {
             return env_name.clone();
         }
 
-        if let Ok(env_name) = std::env::var("DRUTO_ENV")
+        if let Ok(env_name) = std::env::var("PORIBESH_ENV")
             && !env_name.trim().is_empty()
         {
             return env_name.trim().to_string();

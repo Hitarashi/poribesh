@@ -3,7 +3,10 @@ use std::{
     time::Duration,
 };
 
-use env::{Env, EnvEditor, EnvError, EnvLoader, EnvParser, FieldValidator, Rule, Secret};
+use poribesh::{
+    EditorLine, Env, EnvEditor, EnvError, EnvLoader, EnvParser, FieldValidator, Rule, Secret,
+    ValidationError,
+};
 
 #[test]
 fn test_parser_syntax_edge_cases() {
@@ -80,7 +83,7 @@ VAR_C=${VAR_A}
 
 #[test]
 fn test_file_resolver() {
-    let temp_dir = std::env::temp_dir().join("druto_test_secret");
+    let temp_dir = std::env::temp_dir().join("poribesh_test_secret");
     fs::create_dir_all(&temp_dir).unwrap();
     let secret_file = temp_dir.join("db_password.txt");
     fs::write(&secret_file, "super_secret_p@ssword\n").unwrap();
@@ -102,7 +105,7 @@ IS_DEBUG=true
 TIMEOUT=15s
 MAX_BODY=10MB
 APP_ENV=production
-API_URL=https://api.druto.dev
+API_URL=https://api.poribesh.dev
 NUM_WORKERS=8
 PERCENTAGE=99.5
 APP_KEY=12345678901234567890123456789012
@@ -140,7 +143,7 @@ TAGS=web,async,rust
     assert_eq!(env.get::<String>("APP_ENV").unwrap(), "production");
     assert_eq!(
         env.get::<String>("API_URL").unwrap(),
-        "https://api.druto.dev"
+        "https://api.poribesh.dev"
     );
     assert_eq!(*env.get::<usize>("NUM_WORKERS").unwrap(), 8);
     assert_eq!(*env.get::<f64>("PERCENTAGE").unwrap(), 99.5);
@@ -196,7 +199,7 @@ APP_ENV=invalid_env
 
 #[test]
 fn test_cascading_file_priority() {
-    let temp_dir = std::env::temp_dir().join("druto_test_cascading");
+    let temp_dir = std::env::temp_dir().join("poribesh_test_cascading");
     drop(fs::remove_dir_all(&temp_dir));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -220,7 +223,7 @@ fn test_cascading_file_priority() {
 
 #[test]
 fn test_editor_modifications_and_example_sync() {
-    let temp_dir = std::env::temp_dir().join("druto_test_editor");
+    let temp_dir = std::env::temp_dir().join("poribesh_test_editor");
     drop(fs::remove_dir_all(&temp_dir));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -349,9 +352,9 @@ PORT_MAX=65535
 
 #[test]
 fn test_export_to_process() {
-    let input = "TEST_DRUTO_EXPORT_KEY=exported_secret_value";
+    let input = "TEST_PORIBESH_EXPORT_KEY=exported_secret_value";
     let env = Env::rules()
-        .rule("TEST_DRUTO_EXPORT_KEY", Rule::string())
+        .rule("TEST_PORIBESH_EXPORT_KEY", Rule::string())
         .parse_and_validate(input)
         .unwrap();
 
@@ -361,18 +364,18 @@ fn test_export_to_process() {
     }
 
     assert_eq!(
-        std::env::var("TEST_DRUTO_EXPORT_KEY").unwrap(),
+        std::env::var("TEST_PORIBESH_EXPORT_KEY").unwrap(),
         "exported_secret_value"
     );
     unsafe {
-        std::env::remove_var("TEST_DRUTO_EXPORT_KEY");
+        std::env::remove_var("TEST_PORIBESH_EXPORT_KEY");
     }
 }
 
 #[test]
 fn test_rules_string_and_numeric_bounds() {
     let input = r#"
-PREFIXED=druto_app
+PREFIXED=poribesh_app
 SUFFIXED=config_file.json
 TOO_LONG=abcdef
 NUM_LOW=5
@@ -386,7 +389,7 @@ BYTES_INVALID=100zenabytes
 "#;
 
     let res = Env::rules()
-        .rule("PREFIXED", Rule::string().starts_with("druto_"))
+        .rule("PREFIXED", Rule::string().starts_with("poribesh_"))
         .rule("SUFFIXED", Rule::string().ends_with(".json"))
         .rule("TOO_LONG", Rule::string().max_length(3))
         .rule("NUM_LOW", Rule::<i32>::integer().min(10))
@@ -543,7 +546,7 @@ fn test_error_display_formatting() {
 
 #[test]
 fn test_loader_with_explicit_file_and_override() {
-    let temp_dir = std::env::temp_dir().join("druto_test_explicit");
+    let temp_dir = std::env::temp_dir().join("poribesh_test_explicit");
     drop(fs::remove_dir_all(&temp_dir));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -740,10 +743,10 @@ fn test_editor_extended_paths() {
     assert_eq!(editor.get("EXPORTED_KEY"), Some("single value"));
     assert_eq!(editor.get("EMPTY_KEY"), Some(""));
 
-    let empty_line = env::EditorLine::Empty;
+    let empty_line = EditorLine::Empty;
     assert_eq!(empty_line.render(), "");
 
-    let raw_line = env::EditorLine::Raw("RAW_ENTRY".to_string());
+    let raw_line = EditorLine::Raw("RAW_ENTRY".to_string());
     assert_eq!(raw_line.render(), "RAW_ENTRY");
 
     let no_path_save = editor.save();
@@ -752,7 +755,7 @@ fn test_editor_extended_paths() {
     let non_existent_load = EnvEditor::load("/non/existent/path/.env");
     assert!(non_existent_load.is_err());
 
-    let temp_dir = std::env::temp_dir().join("druto_test_editor_sync");
+    let temp_dir = std::env::temp_dir().join("poribesh_test_editor_sync");
     drop(fs::remove_dir_all(&temp_dir));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -775,11 +778,11 @@ fn test_loader_environment_resolution_and_defaults() {
     assert!(!paths.iter().any(|p| p.ends_with(".env.local")));
 
     unsafe {
-        std::env::set_var("DRUTO_ENV", "staging");
+        std::env::set_var("PORIBESH_ENV", "staging");
     }
     assert_eq!(EnvLoader::new().resolve_active_env(), "staging");
     unsafe {
-        std::env::remove_var("DRUTO_ENV");
+        std::env::remove_var("PORIBESH_ENV");
     }
 
     unsafe {
@@ -790,7 +793,7 @@ fn test_loader_environment_resolution_and_defaults() {
         std::env::remove_var("APP_ENV");
     }
 
-    let temp_dir = std::env::temp_dir().join("druto_test_load_validate");
+    let temp_dir = std::env::temp_dir().join("poribesh_test_load_validate");
     drop(fs::remove_dir_all(&temp_dir));
     fs::create_dir_all(&temp_dir).unwrap();
     fs::write(temp_dir.join(".env"), "PORT=5000\n").unwrap();
@@ -807,7 +810,7 @@ fn test_loader_environment_resolution_and_defaults() {
 
 #[test]
 fn test_interpolator_missing_file_error() {
-    let input = "SECRET_KEY=file:/tmp/definitely_missing_file_druto_test_12345.txt";
+    let input = "SECRET_KEY=file:/tmp/definitely_missing_file_poribesh_test_12345.txt";
     let res = EnvLoader::new().load_from_str(input);
     assert!(matches!(res, Err(EnvError::Resolver { .. })));
 }
@@ -830,7 +833,7 @@ fn test_error_source_and_display_coverage() {
     };
     assert!(format!("{cyclic_err}").contains("cyclic dependency"));
 
-    let val_err = env::ValidationError::new("KEY", "msg");
+    let val_err = ValidationError::new("KEY", "msg");
     assert_eq!(format!("{val_err}"), "KEY: msg");
 
     #[cfg(feature = "serde")]
@@ -858,7 +861,7 @@ fn test_loader_path_branches() {
     let paths_empty = loader_empty.get_cascaded_paths();
     assert_eq!(paths_empty.len(), 2);
 
-    let temp_dir = std::env::temp_dir().join("druto_test_abs_load");
+    let temp_dir = std::env::temp_dir().join("poribesh_test_abs_load");
     drop(fs::remove_dir_all(&temp_dir));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -1017,7 +1020,7 @@ fn test_secret_serialize_coverage() {
 
 #[test]
 fn test_env_raw_contains_and_deserialization_failures() {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::HashMap;
 
     let mut raw = HashMap::new();
     raw.insert("ONLY_RAW_KEY".to_string(), "val".to_string());
@@ -1036,6 +1039,7 @@ fn test_env_raw_contains_and_deserialization_failures() {
         let dummy = FailingBool { flag: true };
         assert!(dummy.flag);
 
+        use std::collections::BTreeMap;
         let map_ok = EnvLoader::new().load_from_str("K1=V1\nK2=V2").unwrap();
         let env_ok = Env::new(map_ok, HashMap::new());
         let map_deser: BTreeMap<String, String> = env_ok.deserialize().unwrap();
@@ -1142,7 +1146,7 @@ fn test_interpolator_nested_and_relative_resolver() {
     let map = EnvLoader::new().load_from_str(input).unwrap();
     assert_eq!(map.get("VAR_X").unwrap(), "deep_fallback");
 
-    let temp_dir = std::env::temp_dir().join("druto_test_rel_secret");
+    let temp_dir = std::env::temp_dir().join("poribesh_test_rel_secret");
     drop(fs::remove_dir_all(&temp_dir));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -1161,7 +1165,7 @@ fn test_interpolator_nested_and_relative_resolver() {
 
 #[test]
 fn test_loader_relative_explicit_and_unreadable() {
-    let temp_dir = std::env::temp_dir().join("druto_test_rel_explicit");
+    let temp_dir = std::env::temp_dir().join("poribesh_test_rel_explicit");
     drop(fs::remove_dir_all(&temp_dir));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -1179,7 +1183,7 @@ fn test_loader_relative_explicit_and_unreadable() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let unreadable_dir = std::env::temp_dir().join("druto_test_unreadable");
+        let unreadable_dir = std::env::temp_dir().join("poribesh_test_unreadable");
         drop(fs::remove_dir_all(&unreadable_dir));
         fs::create_dir_all(&unreadable_dir).unwrap();
 
@@ -1200,18 +1204,18 @@ fn test_loader_relative_explicit_and_unreadable() {
 #[test]
 fn test_loader_override_system_in_load_from_str() {
     unsafe {
-        std::env::set_var("DRUTO_OVERRIDE_STR_TEST", "from_system");
+        std::env::set_var("PORIBESH_OVERRIDE_STR_TEST", "from_system");
     }
 
     let map = EnvLoader::new()
         .override_system(true)
-        .load_from_str("DRUTO_OVERRIDE_STR_TEST=from_file")
+        .load_from_str("PORIBESH_OVERRIDE_STR_TEST=from_file")
         .unwrap();
 
-    assert_eq!(map.get("DRUTO_OVERRIDE_STR_TEST").unwrap(), "from_file");
+    assert_eq!(map.get("PORIBESH_OVERRIDE_STR_TEST").unwrap(), "from_file");
 
     unsafe {
-        std::env::remove_var("DRUTO_OVERRIDE_STR_TEST");
+        std::env::remove_var("PORIBESH_OVERRIDE_STR_TEST");
     }
 }
 
