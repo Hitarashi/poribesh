@@ -1,4 +1,4 @@
-use std::{any::Any, collections::HashMap, fmt, str::FromStr, time::Duration};
+use std::{any::Any, collections::HashMap, fmt, str::FromStr, sync::Arc, time::Duration};
 
 use crate::{error::ValidationError, secret::Secret};
 
@@ -12,13 +12,13 @@ pub trait FieldValidator: Send + Sync {
     ) -> Result<Box<dyn Any + Send + Sync>, ValidationError>;
 }
 
-/// Type alias for rule validation closures.
-pub type RuleValidator<T> =
-    Box<dyn Fn(&str, &HashMap<String, String>) -> Result<T, ValidationError> + Send + Sync>;
+/// Type alias for rule evaluation functions.
+pub type RuleEvaluator<T> =
+    Arc<dyn Fn(&str, Option<&str>) -> Result<T, ValidationError> + Send + Sync>;
 
 /// A validation rule for an environment variable producing a strongly-typed value `T`.
 pub struct Rule<T> {
-    validator: RuleValidator<T>,
+    evaluator: RuleEvaluator<T>,
 }
 
 impl<T: Send + Sync + 'static> FieldValidator for Rule<T> {
@@ -27,51 +27,153 @@ impl<T: Send + Sync + 'static> FieldValidator for Rule<T> {
         key: &str,
         raw_map: &HashMap<String, String>,
     ) -> Result<Box<dyn Any + Send + Sync>, ValidationError> {
-        let value = (self.validator)(key, raw_map)?;
+        let raw_val = raw_map.get(key).map(String::as_str);
+        let value = (self.evaluator)(key, raw_val)?;
         Ok(Box::new(value))
     }
 }
 
-impl<T: Send + Sync + Clone + 'static> Rule<T> {
+impl<T: Clone + Send + Sync + 'static> Rule<T> {
     /// Provides a fallback default value if the environment variable is missing or empty.
-    pub fn default_value(self, default: T) -> Rule<T> {
-        Rule {
-            validator: Box::new(move |key, raw_map| match (self.validator)(key, raw_map) {
-                Ok(val) => Ok(val),
-                Err(err) => {
-                    let is_missing = raw_map.get(key).is_none_or(|val| val.trim().is_empty());
-                    if is_missing {
-                        Ok(default.clone())
-                    } else {
-                        Err(err)
-                    }
-                }
+    pub fn default_value(self, default: T) -> Self {
+        let evaluator = self.evaluator;
+        Self {
+            evaluator: Arc::new(move |key, raw| match raw {
+                None => Ok(default.clone()),
+                Some(value) if value.trim().is_empty() => Ok(default.clone()),
+                Some(_) => match evaluator(key, raw) {
+                    Ok(val) => Ok(val),
+                    Err(err) => Err(err),
+                },
             }),
         }
     }
 
+    /// Alias for `default_value`.
+    pub fn default(self, default: T) -> Self {
+        self.default_value(default)
+    }
+
     /// Makes the environment variable optional, producing an `Option<T>`.
     pub fn optional(self) -> Rule<Option<T>> {
+        let evaluator = self.evaluator;
         Rule {
-            validator: Box::new(move |key, raw_map| {
-                let is_missing = raw_map.get(key).is_none_or(|val| val.trim().is_empty());
-                if is_missing {
-                    Ok(None)
-                } else {
-                    let parsed = (self.validator)(key, raw_map)?;
-                    Ok(Some(parsed))
-                }
+            evaluator: Arc::new(move |key, raw| match raw {
+                None => Ok(None),
+                Some(value) if value.trim().is_empty() => Ok(None),
+                Some(_) => evaluator(key, raw).map(Some),
             }),
         }
     }
 }
 
+#[derive(Clone, Default)]
+struct StringConstraints {
+    min_length: Option<usize>,
+    max_length: Option<usize>,
+    starts_with: Option<&'static str>,
+    ends_with: Option<&'static str>,
+    allowed_enums: Option<&'static [&'static str]>,
+    #[cfg(feature = "regex")]
+    regex: Option<regex::Regex>,
+    is_url: bool,
+}
+
+impl StringConstraints {
+    fn check(&self, key: &str, value: &str) -> Result<(), ValidationError> {
+        if self.is_url {
+            let separator = value.find("://");
+            let has_valid_scheme = separator.is_some_and(|pos| {
+                pos > 0
+                    && value[..pos]
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '+' || ch == '-' || ch == '.')
+            });
+            let has_host = separator.is_some_and(|pos| {
+                let rest = &value[pos + 3..];
+                !rest.is_empty()
+            });
+
+            if !has_valid_scheme || !has_host {
+                return Err(ValidationError::new(
+                    key,
+                    "must be a valid URL with scheme and host",
+                ));
+            }
+        }
+
+        if let Some(min) = self.min_length {
+            if value.len() < min {
+                return Err(ValidationError::new(
+                    key,
+                    format!("must have at least {min} characters"),
+                ));
+            }
+        }
+
+        if let Some(max) = self.max_length {
+            if value.len() > max {
+                return Err(ValidationError::new(
+                    key,
+                    format!("must have at most {max} characters"),
+                ));
+            }
+        }
+
+        if let Some(prefix) = self.starts_with {
+            if !value.starts_with(prefix) {
+                return Err(ValidationError::new(
+                    key,
+                    format!("must start with `{prefix}`"),
+                ));
+            }
+        }
+
+        if let Some(suffix) = self.ends_with {
+            if !value.ends_with(suffix) {
+                return Err(ValidationError::new(
+                    key,
+                    format!("must end with `{suffix}`"),
+                ));
+            }
+        }
+
+        if let Some(allowed) = self.allowed_enums {
+            if !allowed.contains(&value) {
+                return Err(ValidationError::new(
+                    key,
+                    format!("must be one of: {}", allowed.join(", ")),
+                ));
+            }
+        }
+
+        #[cfg(feature = "regex")]
+        if let Some(pattern) = &self.regex {
+            if !pattern.is_match(value) {
+                return Err(ValidationError::new(
+                    key,
+                    format!("does not match required pattern `{}`", pattern.as_str()),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl Rule<String> {
-    /// Validates that the variable is a string.
+    /// Validates that the variable is a non-empty string.
     pub fn string() -> Self {
-        Self {
-            validator: Box::new(|key, raw_map| match raw_map.get(key) {
-                Some(value) if !value.is_empty() => Ok(value.clone()),
+        Self::from_constraints(StringConstraints::default())
+    }
+
+    fn from_constraints(constraints: StringConstraints) -> Self {
+        Rule {
+            evaluator: Arc::new(move |key, raw| match raw {
+                Some(value) if !value.is_empty() => {
+                    constraints.check(key, value)?;
+                    Ok(value.to_string())
+                }
                 _ => Err(ValidationError::new(key, "is required and cannot be empty")),
             }),
         }
@@ -84,9 +186,10 @@ impl Rule<String> {
 
     /// Requires the string to have at least `min` characters.
     pub fn min_length(self, min: usize) -> Self {
+        let evaluator = self.evaluator;
         Rule {
-            validator: Box::new(move |key, raw_map| {
-                let value = (self.validator)(key, raw_map)?;
+            evaluator: Arc::new(move |key, raw| {
+                let value = evaluator(key, raw)?;
                 if value.len() < min {
                     Err(ValidationError::new(
                         key,
@@ -101,9 +204,10 @@ impl Rule<String> {
 
     /// Requires the string to have at most `max` characters.
     pub fn max_length(self, max: usize) -> Self {
+        let evaluator = self.evaluator;
         Rule {
-            validator: Box::new(move |key, raw_map| {
-                let value = (self.validator)(key, raw_map)?;
+            evaluator: Arc::new(move |key, raw| {
+                let value = evaluator(key, raw)?;
                 if value.len() > max {
                     Err(ValidationError::new(
                         key,
@@ -118,9 +222,10 @@ impl Rule<String> {
 
     /// Requires the string to start with the specified prefix.
     pub fn starts_with(self, prefix: &'static str) -> Self {
+        let evaluator = self.evaluator;
         Rule {
-            validator: Box::new(move |key, raw_map| {
-                let value = (self.validator)(key, raw_map)?;
+            evaluator: Arc::new(move |key, raw| {
+                let value = evaluator(key, raw)?;
                 if !value.starts_with(prefix) {
                     Err(ValidationError::new(
                         key,
@@ -135,9 +240,10 @@ impl Rule<String> {
 
     /// Requires the string to end with the specified suffix.
     pub fn ends_with(self, suffix: &'static str) -> Self {
+        let evaluator = self.evaluator;
         Rule {
-            validator: Box::new(move |key, raw_map| {
-                let value = (self.validator)(key, raw_map)?;
+            evaluator: Arc::new(move |key, raw| {
+                let value = evaluator(key, raw)?;
                 if !value.ends_with(suffix) {
                     Err(ValidationError::new(
                         key,
@@ -154,9 +260,10 @@ impl Rule<String> {
     #[cfg(feature = "regex")]
     pub fn regex(self, pattern: &'static str) -> Self {
         let compiled = regex::Regex::new(pattern).expect("invalid regular expression pattern");
+        let evaluator = self.evaluator;
         Rule {
-            validator: Box::new(move |key, raw_map| {
-                let value = (self.validator)(key, raw_map)?;
+            evaluator: Arc::new(move |key, raw| {
+                let value = evaluator(key, raw)?;
                 if !compiled.is_match(&value) {
                     Err(ValidationError::new(
                         key,
@@ -168,13 +275,31 @@ impl Rule<String> {
             }),
         }
     }
+
+    /// Validates that the variable is a well-formed URL.
+    pub fn url() -> Self {
+        let constraints = StringConstraints {
+            is_url: true,
+            ..Default::default()
+        };
+        Self::from_constraints(constraints)
+    }
+
+    /// Enforces that the string value is one of the allowed enum options.
+    pub fn enum_values(allowed: &'static [&'static str]) -> Self {
+        let constraints = StringConstraints {
+            allowed_enums: Some(allowed),
+            ..Default::default()
+        };
+        Self::from_constraints(constraints)
+    }
 }
 
 impl Rule<bool> {
     /// Validates and parses boolean values (`true`, `false`, `1`, `0`, `yes`, `no`, `on`, `off`).
     pub fn boolean() -> Self {
         Self {
-            validator: Box::new(|key, raw_map| match raw_map.get(key) {
+            evaluator: Arc::new(|key, raw| match raw {
                 Some(value) => {
                     let normalized = value.trim().to_ascii_lowercase();
                     match normalized.as_str() {
@@ -196,7 +321,7 @@ impl Rule<u16> {
     /// Validates that the variable is a valid network port number (1..=65535).
     pub fn port() -> Self {
         Self {
-            validator: Box::new(|key, raw_map| match raw_map.get(key) {
+            evaluator: Arc::new(|key, raw| match raw {
                 Some(value) => match value.trim().parse::<u16>() {
                     Ok(port_number) if port_number > 0 => Ok(port_number),
                     _ => Err(ValidationError::new(
@@ -210,65 +335,11 @@ impl Rule<u16> {
     }
 }
 
-impl Rule<String> {
-    /// Validates that the variable is a well-formed URL.
-    pub fn url() -> Self {
-        Self {
-            validator: Box::new(|key, raw_map| match raw_map.get(key) {
-                Some(value) => {
-                    let trimmed = value.trim();
-                    let separator = trimmed.find("://");
-                    let has_valid_scheme = separator.is_some_and(|pos| {
-                        pos > 0
-                            && trimmed[..pos].chars().all(|ch| {
-                                ch.is_ascii_alphanumeric() || ch == '+' || ch == '-' || ch == '.'
-                            })
-                    });
-                    let has_host = separator.is_some_and(|pos| {
-                        let rest = &trimmed[pos + 3..];
-                        !rest.is_empty()
-                    });
-
-                    if has_valid_scheme && has_host {
-                        Ok(trimmed.to_string())
-                    } else {
-                        Err(ValidationError::new(
-                            key,
-                            "must be a valid URL with scheme and host",
-                        ))
-                    }
-                }
-                None => Err(ValidationError::new(key, "is required")),
-            }),
-        }
-    }
-
-    /// Enforces that the string value is one of the allowed enum options.
-    pub fn enum_values(allowed: &'static [&'static str]) -> Self {
-        Self {
-            validator: Box::new(move |key, raw_map| match raw_map.get(key) {
-                Some(value) => {
-                    let trimmed = value.trim();
-                    if allowed.contains(&trimmed) {
-                        Ok(trimmed.to_string())
-                    } else {
-                        Err(ValidationError::new(
-                            key,
-                            format!("must be one of: {}", allowed.join(", ")),
-                        ))
-                    }
-                }
-                None => Err(ValidationError::new(key, "is required")),
-            }),
-        }
-    }
-}
-
 impl Rule<Duration> {
     /// Validates and parses time duration strings (e.g. `500ms`, `10s`, `15m`, `2h`, `1d`).
     pub fn duration() -> Self {
         Self {
-            validator: Box::new(|key, raw_map| match raw_map.get(key) {
+            evaluator: Arc::new(|key, raw| match raw {
                 Some(value) => parse_duration(value.trim())
                     .map_err(|message| ValidationError::new(key, message)),
                 None => Err(ValidationError::new(key, "is required")),
@@ -281,7 +352,7 @@ impl Rule<u64> {
     /// Validates and parses byte sizes (e.g. `512B`, `10KB`, `50MB`, `2GB`).
     pub fn bytes() -> Self {
         Self {
-            validator: Box::new(|key, raw_map| match raw_map.get(key) {
+            evaluator: Arc::new(|key, raw| match raw {
                 Some(value) => {
                     parse_bytes(value.trim()).map_err(|message| ValidationError::new(key, message))
                 }
@@ -298,7 +369,7 @@ where
     /// Validates and parses an integer or numeric type.
     pub fn integer() -> Self {
         Self {
-            validator: Box::new(|key, raw_map| match raw_map.get(key) {
+            evaluator: Arc::new(|key, raw| match raw {
                 Some(value) => value
                     .trim()
                     .parse::<T>()
@@ -311,7 +382,7 @@ where
     /// Validates and parses a floating-point number.
     pub fn float() -> Self {
         Self {
-            validator: Box::new(|key, raw_map| match raw_map.get(key) {
+            evaluator: Arc::new(|key, raw| match raw {
                 Some(value) => value
                     .trim()
                     .parse::<T>()
@@ -321,11 +392,12 @@ where
         }
     }
 
-    /// Enforces a minimum value.
+    /// Enforces a minimum numeric value.
     pub fn min(self, minimum: T) -> Self {
+        let evaluator = self.evaluator;
         Rule {
-            validator: Box::new(move |key, raw_map| {
-                let value = (self.validator)(key, raw_map)?;
+            evaluator: Arc::new(move |key, raw| {
+                let value = evaluator(key, raw)?;
                 if value < minimum {
                     Err(ValidationError::new(
                         key,
@@ -338,11 +410,12 @@ where
         }
     }
 
-    /// Enforces a maximum value.
+    /// Enforces a maximum numeric value.
     pub fn max(self, maximum: T) -> Self {
+        let evaluator = self.evaluator;
         Rule {
-            validator: Box::new(move |key, raw_map| {
-                let value = (self.validator)(key, raw_map)?;
+            evaluator: Arc::new(move |key, raw| {
+                let value = evaluator(key, raw)?;
                 if value > maximum {
                     Err(ValidationError::new(
                         key,
@@ -357,9 +430,10 @@ where
 
     /// Enforces an inclusive range between `minimum` and `maximum`.
     pub fn range(self, minimum: T, maximum: T) -> Self {
+        let evaluator = self.evaluator;
         Rule {
-            validator: Box::new(move |key, raw_map| {
-                let value = (self.validator)(key, raw_map)?;
+            evaluator: Arc::new(move |key, raw| {
+                let value = evaluator(key, raw)?;
                 if value < minimum || value > maximum {
                     Err(ValidationError::new(
                         key,
@@ -376,9 +450,10 @@ where
 impl<T: Send + Sync + 'static> Rule<Secret<T>> {
     /// Wraps an inner rule's validated value in a `Secret<T>` to prevent leakage in debug and logs.
     pub fn secret(inner_rule: Rule<T>) -> Self {
+        let evaluator = inner_rule.evaluator;
         Self {
-            validator: Box::new(move |key, raw_map| {
-                let value = (inner_rule.validator)(key, raw_map)?;
+            evaluator: Arc::new(move |key, raw| {
+                let value = evaluator(key, raw)?;
                 Ok(Secret::new(value))
             }),
         }
@@ -393,9 +468,9 @@ impl<T: Send + Sync + 'static> Rule<T> {
         S: jachai::schema::Schema<T> + Send + Sync + 'static,
     {
         Self {
-            validator: Box::new(move |key, raw_map| match raw_map.get(key) {
+            evaluator: Arc::new(move |key, raw| match raw {
                 Some(value) => {
-                    let json_val = serde_json::Value::String(value.clone());
+                    let json_val = serde_json::Value::String(value.to_string());
                     schema
                         .validate(&json_val)
                         .map_err(|err| ValidationError::new(key, err.to_string()))
@@ -413,7 +488,7 @@ where
     /// Parses a comma-separated list of items into a `Vec<T>`.
     pub fn list() -> Self {
         Self {
-            validator: Box::new(|key, raw_map| match raw_map.get(key) {
+            evaluator: Arc::new(|key, raw| match raw {
                 Some(value) => {
                     let mut items = Vec::new();
                     for part in value.split(',') {

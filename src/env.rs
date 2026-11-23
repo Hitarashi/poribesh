@@ -1,11 +1,18 @@
 use std::{
     any::Any,
     collections::HashMap,
-    fmt,
+    fmt, fs,
+    path::PathBuf,
     sync::{Arc, OnceLock},
 };
 
-use crate::error::EnvError;
+use crate::{
+    error::EnvError,
+    interpolator::EnvInterpolator,
+    parser,
+    rules::FieldValidator,
+    secret::{FsSecretResolver, Secret, SecretResolver},
+};
 
 static GLOBAL_ENV: OnceLock<Env> = OnceLock::new();
 
@@ -61,6 +68,296 @@ pub fn contains(key: &str) -> bool {
     current().map(|env| env.contains(key)).unwrap_or(false)
 }
 
+/// Fluent configuration builder for cascading discovery, interpolation, and schema validation.
+pub struct EnvBuilder {
+    base_dir: PathBuf,
+    active_env: Option<String>,
+    override_system: bool,
+    explicit_file: Option<PathBuf>,
+    secret_resolver: Arc<dyn SecretResolver>,
+    rules: Vec<(String, Box<dyn FieldValidator>)>,
+}
+
+impl Default for EnvBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EnvBuilder {
+    /// Creates a new `EnvBuilder` with default discovery settings.
+    pub fn new() -> Self {
+        Self {
+            base_dir: PathBuf::from("."),
+            active_env: None,
+            override_system: false,
+            explicit_file: None,
+            secret_resolver: Arc::new(FsSecretResolver),
+            rules: Vec::new(),
+        }
+    }
+
+    /// Sets the base directory from which `.env` files are loaded.
+    pub fn base_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.base_dir = path.into();
+        self
+    }
+
+    /// Alias for `base_dir`.
+    pub fn with_base_dir(self, path: impl Into<PathBuf>) -> Self {
+        self.base_dir(path)
+    }
+
+    /// Sets the active environment name (e.g. `"development"`, `"production"`, `"test"`).
+    pub fn env(mut self, env_name: impl Into<String>) -> Self {
+        self.active_env = Some(env_name.into());
+        self
+    }
+
+    /// Alias for `env`.
+    pub fn with_env(self, env_name: impl Into<String>) -> Self {
+        self.env(env_name)
+    }
+
+    /// Configures whether `.env` file values should override existing OS environment variables.
+    pub fn override_system(mut self, override_system: bool) -> Self {
+        self.override_system = override_system;
+        self
+    }
+
+    /// Directs the loader to read an explicit `.env` file instead of cascading.
+    pub fn with_file(mut self, file_path: impl Into<PathBuf>) -> Self {
+        self.explicit_file = Some(file_path.into());
+        self
+    }
+
+    /// Configures a custom secret resolver for resolving external secrets.
+    pub fn secret_resolver(mut self, resolver: impl SecretResolver + 'static) -> Self {
+        self.secret_resolver = Arc::new(resolver);
+        self
+    }
+
+    /// Registers a validation rule for the specified environment variable name.
+    pub fn rule<T: Send + Sync + 'static>(
+        mut self,
+        key: impl Into<String>,
+        rule: crate::rules::Rule<T>,
+    ) -> Self {
+        self.rules.push((key.into(), Box::new(rule)));
+        self
+    }
+
+    /// Resolves the active environment name from explicit config, `PORIBESH_ENV`, `APP_ENV`, or defaults to `"development"`.
+    pub fn resolve_active_env(&self) -> String {
+        if let Some(env_name) = &self.active_env {
+            return env_name.clone();
+        }
+
+        if let Ok(env_name) = std::env::var("PORIBESH_ENV")
+            && !env_name.trim().is_empty()
+        {
+            return env_name.trim().to_string();
+        }
+
+        if let Ok(env_name) = std::env::var("APP_ENV")
+            && !env_name.trim().is_empty()
+        {
+            return env_name.trim().to_string();
+        }
+
+        "development".to_string()
+    }
+
+    /// Returns the cascading list of `.env` file paths in ascending priority order.
+    pub fn get_cascaded_paths(&self) -> Vec<PathBuf> {
+        if let Some(file_path) = &self.explicit_file {
+            let target_path = if file_path.is_absolute() {
+                file_path.clone()
+            } else {
+                self.base_dir.join(file_path)
+            };
+            return vec![target_path];
+        }
+
+        let env_name = self.resolve_active_env();
+        let is_test = env_name == "test" || env_name == "testing";
+
+        let mut paths = Vec::new();
+        paths.push(self.base_dir.join(".env"));
+
+        if !env_name.is_empty() {
+            paths.push(self.base_dir.join(format!(".env.{env_name}")));
+        }
+
+        if !is_test {
+            paths.push(self.base_dir.join(".env.local"));
+        }
+
+        if !env_name.is_empty() {
+            paths.push(self.base_dir.join(format!(".env.{env_name}.local")));
+        }
+
+        paths
+    }
+
+    /// Discovers, reads, merges, and interpolates environment variables into a raw map.
+    pub fn load_raw_map(&self) -> Result<HashMap<String, String>, EnvError> {
+        let mut file_map = HashMap::new();
+
+        if let Some(explicit_file) = &self.explicit_file {
+            let target_path = if explicit_file.is_absolute() {
+                explicit_file.clone()
+            } else {
+                self.base_dir.join(explicit_file)
+            };
+
+            let contents = fs::read_to_string(&target_path).map_err(|err| {
+                EnvError::Io(std::io::Error::new(
+                    err.kind(),
+                    format!("failed to read `{}`: {err}", target_path.display()),
+                ))
+            })?;
+
+            let entries = parser::parse_to_map(&contents)?;
+            file_map.extend(entries);
+        } else {
+            let paths = self.get_cascaded_paths();
+            for path in paths {
+                if path.is_file() {
+                    let contents = match fs::read_to_string(&path) {
+                        Ok(text) => text,
+                        Err(err) => {
+                            return Err(EnvError::Io(std::io::Error::new(
+                                err.kind(),
+                                format!("failed to read `{}`: {err}", path.display()),
+                            )));
+                        }
+                    };
+                    let entries = parser::parse_to_map(&contents)?;
+                    file_map.extend(entries);
+                }
+            }
+        }
+
+        let mut merged = HashMap::new();
+        let system_vars: HashMap<String, String> = std::env::vars().collect();
+
+        if self.override_system {
+            merged.extend(system_vars);
+            merged.extend(file_map);
+        } else {
+            merged.extend(file_map);
+            merged.extend(system_vars);
+        }
+
+        let interpolator = EnvInterpolator::new(&self.base_dir, self.secret_resolver.as_ref());
+        interpolator.interpolate(&merged)
+    }
+
+    /// Ingests and interpolates environment variables directly from a raw string.
+    pub fn load_from_str(&self, contents: &str) -> Result<HashMap<String, String>, EnvError> {
+        let file_map = parser::parse_to_map(contents)?;
+        let mut merged = HashMap::new();
+        let system_vars: HashMap<String, String> = std::env::vars().collect();
+
+        if self.override_system {
+            merged.extend(system_vars);
+            merged.extend(file_map);
+        } else {
+            merged.extend(file_map);
+            merged.extend(system_vars);
+        }
+
+        let interpolator = EnvInterpolator::new(&self.base_dir, self.secret_resolver.as_ref());
+        interpolator.interpolate(&merged)
+    }
+
+    /// Discovers, reads, merges, interpolates, and validates environment variables.
+    pub fn load(&self) -> Result<Env, EnvError> {
+        let raw_map = self.load_raw_map()?;
+        self.validate_owned(raw_map)
+    }
+
+    /// Loads and validates configuration using the discovery settings from `loader`.
+    pub fn load_and_validate(&self, loader: &EnvBuilder) -> Result<Env, EnvError> {
+        let raw_map = loader.load_raw_map()?;
+        self.validate_owned(raw_map)
+    }
+
+    /// Ingests and validates directly from a raw `.env` string without accessing the filesystem.
+    pub fn from_str(&self, contents: &str) -> Result<Env, EnvError> {
+        let interpolated = self.load_from_str(contents)?;
+        self.validate_owned(interpolated)
+    }
+
+    /// Parses raw `.env` contents and validates the schema. Alias for `from_str`.
+    pub fn parse_and_validate(&self, contents: &str) -> Result<Env, EnvError> {
+        self.from_str(contents)
+    }
+
+    /// Ingests and validates from a specific file path.
+    pub fn from_file(&self, path: impl Into<PathBuf>) -> Result<Env, EnvError> {
+        let mut cloned = Self {
+            base_dir: self.base_dir.clone(),
+            active_env: self.active_env.clone(),
+            override_system: self.override_system,
+            explicit_file: Some(path.into()),
+            secret_resolver: self.secret_resolver.clone(),
+            rules: Vec::new(),
+        };
+        // Move rules
+        cloned.rules = Vec::with_capacity(self.rules.len());
+        // Since FieldValidator doesn't clone easily, we use load with configured explicit file
+        let target_path = cloned.explicit_file.as_ref().unwrap();
+        let actual_path = if target_path.is_absolute() {
+            target_path.clone()
+        } else {
+            self.base_dir.join(target_path)
+        };
+        let contents = fs::read_to_string(&actual_path).map_err(|err| {
+            EnvError::Io(std::io::Error::new(
+                err.kind(),
+                format!("failed to read `{}`: {err}", actual_path.display()),
+            ))
+        })?;
+        self.from_str(&contents)
+    }
+
+    /// Validates the provided raw key-value mapping against registered schema rules.
+    pub fn validate(&self, raw_map: &HashMap<String, String>) -> Result<Env, EnvError> {
+        self.validate_arc(Arc::new(raw_map.clone()))
+    }
+
+    /// Validates an owned raw key-value mapping against registered schema rules.
+    pub fn validate_owned(&self, raw_map: HashMap<String, String>) -> Result<Env, EnvError> {
+        self.validate_arc(Arc::new(raw_map))
+    }
+
+    /// Validates an `Arc`-shared raw key-value mapping against registered schema rules.
+    pub fn validate_arc(&self, raw_map: Arc<HashMap<String, String>>) -> Result<Env, EnvError> {
+        let mut errors = Vec::new();
+        let mut typed_values: HashMap<String, Box<dyn Any + Send + Sync>> =
+            HashMap::with_capacity(self.rules.len());
+
+        for (key, validator) in &self.rules {
+            match validator.validate(key, &raw_map) {
+                Ok(boxed_value) => {
+                    typed_values.insert(key.clone(), boxed_value);
+                }
+                Err(validation_error) => {
+                    errors.push(validation_error);
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            Err(EnvError::ValidationFailed { errors })
+        } else {
+            Ok(Env::new(raw_map, typed_values))
+        }
+    }
+}
+
 /// An immutable, thread-safe container holding validated typed environment variables.
 pub struct Env {
     raw_values: Arc<HashMap<String, String>>,
@@ -75,6 +372,14 @@ impl fmt::Debug for Env {
     }
 }
 
+impl std::str::FromStr for Env {
+    type Err = EnvError;
+
+    fn from_str(contents: &str) -> Result<Self, Self::Err> {
+        Self::builder().from_str(contents)
+    }
+}
+
 impl Env {
     /// Constructs a new `Env` instance with the given raw and typed mappings.
     pub fn new(
@@ -85,6 +390,36 @@ impl Env {
             raw_values: raw_values.into(),
             typed_values,
         }
+    }
+
+    /// Creates a new fluent `EnvBuilder` for configuring rules and loading configuration.
+    pub fn builder() -> EnvBuilder {
+        EnvBuilder::new()
+    }
+
+    /// Alias for `builder` when focusing on schema rules.
+    pub fn rules() -> EnvBuilder {
+        EnvBuilder::new()
+    }
+
+    /// Creates a new `EnvBuilder` for discovering and reading `.env` files.
+    pub fn loader() -> EnvBuilder {
+        EnvBuilder::new()
+    }
+
+    /// Loads environment variables using default cascading discovery without rules.
+    pub fn load() -> Result<Self, EnvError> {
+        Self::builder().load()
+    }
+
+    /// Ingests environment variables from an explicit file path without rules.
+    pub fn from_file(path: impl Into<PathBuf>) -> Result<Self, EnvError> {
+        Self::builder().with_file(path).load()
+    }
+
+    /// Parses raw `.env` content directly into a key-value HashMap.
+    pub fn parse_to_map(contents: &str) -> Result<HashMap<String, String>, EnvError> {
+        parser::parse_to_map(contents)
     }
 
     /// Retrieves a typed reference to a validated environment variable.
@@ -105,6 +440,11 @@ impl Env {
                 key: key.to_string(),
             }),
         }
+    }
+
+    /// Retrieves a reference to a secret variable wrapped in `Secret<T>`.
+    pub fn get_secret<T: 'static>(&self, key: &str) -> Result<&Secret<T>, EnvError> {
+        self.get::<Secret<T>>(key)
     }
 
     /// Retrieves the raw string representation of an environment variable.

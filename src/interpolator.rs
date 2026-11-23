@@ -1,21 +1,19 @@
-use std::{
-    collections::HashMap,
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, path::Path};
 
-use crate::error::EnvError;
+use crate::{error::EnvError, secret::SecretResolver};
 
 /// Resolves variable references (`${VAR}`, `$VAR`, `${VAR:-default}`) and custom resolvers.
-pub struct EnvInterpolator {
-    base_path: PathBuf,
+pub struct EnvInterpolator<'a> {
+    base_path: &'a Path,
+    secret_resolver: &'a dyn SecretResolver,
 }
 
-impl EnvInterpolator {
-    /// Creates a new interpolator with the given base directory for relative path resolution.
-    pub fn new(base_path: impl Into<PathBuf>) -> Self {
+impl<'a> EnvInterpolator<'a> {
+    /// Creates a new interpolator with the given base directory and secret resolver.
+    pub fn new(base_path: &'a Path, secret_resolver: &'a dyn SecretResolver) -> Self {
         Self {
-            base_path: base_path.into(),
+            base_path,
+            secret_resolver,
         }
     }
 
@@ -35,11 +33,11 @@ impl EnvInterpolator {
         Ok(resolved)
     }
 
-    fn resolve_variable<'a>(
+    fn resolve_variable<'b>(
         &self,
-        key: &'a str,
-        map: &'a HashMap<String, String>,
-        stack: &mut Vec<&'a str>,
+        key: &'b str,
+        map: &'b HashMap<String, String>,
+        stack: &mut Vec<&'b str>,
         resolved: &mut HashMap<String, String>,
     ) -> Result<(), EnvError> {
         if resolved.contains_key(key) {
@@ -47,7 +45,7 @@ impl EnvInterpolator {
         }
 
         if stack.contains(&key) {
-            let mut cycle: Vec<String> = stack.iter().map(|s| (*s).to_string()).collect();
+            let mut cycle: Vec<String> = stack.iter().map(|item| (*item).to_string()).collect();
             cycle.push(key.to_string());
             return Err(EnvError::CyclicDependency { cycle });
         }
@@ -59,18 +57,18 @@ impl EnvInterpolator {
             None => std::env::var(key).unwrap_or_default(),
         };
 
-        let processed = self.process_resolvers(key, expanded, &self.base_path)?;
+        let processed = self.process_resolvers(key, expanded)?;
 
         stack.pop();
         resolved.insert(key.to_string(), processed);
         Ok(())
     }
 
-    fn expand_string<'a>(
+    fn expand_string<'b>(
         &self,
-        input: &'a str,
-        map: &'a HashMap<String, String>,
-        stack: &mut Vec<&'a str>,
+        input: &'b str,
+        map: &'b HashMap<String, String>,
+        stack: &mut Vec<&'b str>,
         resolved: &mut HashMap<String, String>,
     ) -> Result<String, EnvError> {
         if !input.contains('$') {
@@ -179,36 +177,20 @@ impl EnvInterpolator {
         Ok(result)
     }
 
-    fn process_resolvers(
-        &self,
-        key: &str,
-        value: String,
-        base_path: &Path,
-    ) -> Result<String, EnvError> {
-        if let Some(file_path_str) = value.strip_prefix("file:") {
-            let relative_or_absolute = Path::new(file_path_str.trim());
-            let target_path = if relative_or_absolute.is_absolute() {
-                relative_or_absolute.to_path_buf()
-            } else {
-                base_path.join(relative_or_absolute)
-            };
-
-            match fs::read_to_string(&target_path) {
-                Ok(contents) => {
-                    let trimmed = contents
-                        .strip_suffix("\r\n")
-                        .or_else(|| contents.strip_suffix('\n'))
-                        .unwrap_or(&contents);
-                    Ok(trimmed.to_string())
-                }
-                Err(err) => Err(EnvError::Resolver {
-                    key: key.to_string(),
-                    message: format!(
-                        "unable to read secret file `{}`: {err}",
-                        target_path.display()
-                    ),
-                }),
-            }
+    fn process_resolvers(&self, key: &str, value: String) -> Result<String, EnvError> {
+        if let Some(target) = value.strip_prefix("file:") {
+            self.secret_resolver
+                .resolve(target, self.base_path)
+                .map_err(|err| {
+                    if let EnvError::Resolver { message, .. } = err {
+                        EnvError::Resolver {
+                            key: key.to_string(),
+                            message,
+                        }
+                    } else {
+                        err
+                    }
+                })
         } else {
             Ok(value)
         }

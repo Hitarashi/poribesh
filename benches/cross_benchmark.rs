@@ -9,7 +9,7 @@ use std::{
     time::Instant,
 };
 
-use poribesh::{EnvInterpolator, EnvParser, Rule};
+use poribesh::{Env, EnvInterpolator, FsSecretResolver, Rule};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -80,7 +80,7 @@ fn main() {
     parsing_metrics.push(bench(
         "poribesh_parse_to_map",
         || {
-            let map = EnvParser::parse_to_map(black_box(&content)).unwrap();
+            let map = Env::parse_to_map(black_box(&content)).unwrap();
             black_box(map);
         },
         10_000,
@@ -99,8 +99,9 @@ fn main() {
     ));
 
     // 2. Interpolation Benchmarks
-    let parsed_map = EnvParser::parse_to_map(&content).unwrap();
-    let interpolator = EnvInterpolator::new(".");
+    let parsed_map = Env::parse_to_map(&content).unwrap();
+    let fs_resolver = FsSecretResolver;
+    let interpolator = EnvInterpolator::new(Path::new("."), &fs_resolver);
     let mut interpolation_metrics = Vec::new();
     interpolation_metrics.push(bench(
         "poribesh_interpolate",

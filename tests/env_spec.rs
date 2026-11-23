@@ -4,8 +4,8 @@ use std::{
 };
 
 use poribesh::{
-    EditorLine, Env, EnvEditor, EnvError, EnvLoader, EnvParser, FieldValidator, Rule, Secret,
-    ValidationError,
+    EditorLine, Env, EnvEditor, EnvError, EnvLoader, EnvParser, FieldValidator,
+    MemorySecretResolver, Rule, Secret, ValidationError,
 };
 
 #[test]
@@ -225,9 +225,9 @@ fn test_cascading_file_priority() {
         .load()
         .unwrap();
 
-    assert_eq!(map.get("FOO").unwrap(), "base");
-    assert_eq!(map.get("BAR").unwrap(), "prod");
-    assert_eq!(map.get("BAZ").unwrap(), "prod_local");
+    assert_eq!(map.get_raw("FOO").unwrap(), "base");
+    assert_eq!(map.get_raw("BAR").unwrap(), "prod");
+    assert_eq!(map.get_raw("BAZ").unwrap(), "prod_local");
 
     fs::remove_dir_all(temp_dir).unwrap();
 }
@@ -570,7 +570,7 @@ fn test_loader_with_explicit_file_and_override() {
         .load()
         .unwrap();
 
-    assert_eq!(map.get("CUSTOM_VAR").unwrap(), "loaded_explicitly");
+    assert_eq!(map.get_raw("CUSTOM_VAR").unwrap(), "loaded_explicitly");
 
     fs::remove_dir_all(temp_dir).unwrap();
 }
@@ -879,7 +879,7 @@ fn test_loader_path_branches() {
     let abs_file = temp_dir.join("abs_file.env");
     fs::write(&abs_file, "LOADED_ABS=1\n").unwrap();
     let res = EnvLoader::new().with_file(&abs_file).load().unwrap();
-    assert_eq!(res.get("LOADED_ABS").unwrap(), "1");
+    assert_eq!(res.get_raw("LOADED_ABS").unwrap(), "1");
 
     fs::remove_dir_all(temp_dir).unwrap();
 }
@@ -1189,7 +1189,7 @@ fn test_loader_relative_explicit_and_unreadable() {
         .load()
         .unwrap();
 
-    assert_eq!(map.get("REL_KEY").unwrap(), "rel_val");
+    assert_eq!(map.get_raw("REL_KEY").unwrap(), "rel_val");
 
     #[cfg(unix)]
     {
@@ -1475,4 +1475,18 @@ fn test_jachai_rule_integration() {
 
     // Test missing key error
     assert!(email_rule.validate("MISSING_KEY", &raw_map).is_err());
+}
+
+#[test]
+fn test_memory_secret_resolver() {
+    let resolver = MemorySecretResolver::new().with_secret("db_pass", "super_secret_value");
+    let env = Env::builder()
+        .secret_resolver(resolver)
+        .rule("DB_PASSWORD", Rule::string())
+        .from_str("DB_PASSWORD=file:db_pass")
+        .unwrap();
+    assert_eq!(
+        env.get::<String>("DB_PASSWORD").unwrap(),
+        "super_secret_value"
+    );
 }
