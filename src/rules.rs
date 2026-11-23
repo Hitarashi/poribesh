@@ -385,6 +385,27 @@ impl<T: Send + Sync + 'static> Rule<Secret<T>> {
     }
 }
 
+#[cfg(feature = "jachai")]
+impl<T: Send + Sync + 'static> Rule<T> {
+    /// Constructs a validation rule evaluated by a `jachai` schema.
+    pub fn jachai<S>(schema: S) -> Self
+    where
+        S: jachai::schema::Schema<T> + Send + Sync + 'static,
+    {
+        Self {
+            validator: Box::new(move |key, raw_map| match raw_map.get(key) {
+                Some(value) => {
+                    let json_val = serde_json::Value::String(value.clone());
+                    schema
+                        .validate(&json_val)
+                        .map_err(|err| ValidationError::new(key, err.to_string()))
+                }
+                None => Err(ValidationError::new(key, "is required")),
+            }),
+        }
+    }
+}
+
 impl<T: FromStr + Send + Sync + 'static> Rule<Vec<T>>
 where
     T::Err: fmt::Display,

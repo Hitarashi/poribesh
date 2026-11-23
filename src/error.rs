@@ -69,6 +69,10 @@ pub enum EnvError {
     /// Deserialization error when mapping to a struct.
     #[cfg(feature = "serde")]
     Deserialize(String),
+    /// Global environment store was already initialized.
+    AlreadyInitialized,
+    /// Global environment store has not been initialized.
+    NotInitialized,
 }
 
 impl fmt::Display for EnvError {
@@ -108,6 +112,18 @@ impl fmt::Display for EnvError {
             #[cfg(feature = "serde")]
             Self::Deserialize(message) => {
                 write!(formatter, "deserialization error: {message}")
+            }
+            Self::AlreadyInitialized => {
+                write!(
+                    formatter,
+                    "global environment store has already been initialized"
+                )
+            }
+            Self::NotInitialized => {
+                write!(
+                    formatter,
+                    "global environment store has not been initialized"
+                )
             }
         }
     }

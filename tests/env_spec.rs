@@ -1287,12 +1287,27 @@ fn test_overflow_and_multiline_recommendations() {
         "99999999999999999999999ms".to_string(),
     );
     map.insert(
+        "D_S_HUGE".to_string(),
+        "99999999999999999999999s".to_string(),
+    );
+    map.insert(
+        "D_M_HUGE".to_string(),
+        "99999999999999999999999m".to_string(),
+    );
+    map.insert(
+        "D_H_HUGE".to_string(),
+        "99999999999999999999999h".to_string(),
+    );
+    map.insert(
         "B_HUGE".to_string(),
         "99999999999999999999999tb".to_string(),
     );
 
     assert!(Rule::duration().validate("D_HUGE", &map).is_err());
     assert!(Rule::duration().validate("D_MS_HUGE", &map).is_err());
+    assert!(Rule::duration().validate("D_S_HUGE", &map).is_err());
+    assert!(Rule::duration().validate("D_M_HUGE", &map).is_err());
+    assert!(Rule::duration().validate("D_H_HUGE", &map).is_err());
     assert!(Rule::bytes().validate("B_HUGE", &map).is_err());
 
     let multiline_input = "FIRST=1\nMULTILINE=\"part 1\npart 2\npart 3\" # comment\nLAST=2";
@@ -1301,6 +1316,152 @@ fn test_overflow_and_multiline_recommendations() {
     assert_eq!(editor.get("FIRST"), Some("1"));
     assert_eq!(editor.get("LAST"), Some("2"));
 
+    let multiline_no_comment = "MULTILINE_RAW=\"line 1\nline 2\" extra text";
+    let editor2 = EnvEditor::parse(multiline_no_comment);
+    assert_eq!(editor2.get("MULTILINE_RAW"), Some("line 1\nline 2"));
+
     let rendered = editor.render();
     assert!(rendered.contains("MULTILINE=\"part 1\npart 2\npart 3\" # comment"));
+}
+
+#[test]
+fn test_editor_extended_queries() {
+    let empty_editor = EnvEditor::parse("");
+    assert!(empty_editor.is_empty());
+    assert_eq!(empty_editor.keys().len(), 0);
+
+    let editor = EnvEditor::parse("export APP_KEY=secret_key\nPORT=3000\n# comment\n\nDEBUG=true");
+    assert!(!editor.is_empty());
+    assert!(editor.contains("APP_KEY"));
+    assert!(editor.contains("PORT"));
+    assert!(editor.contains("DEBUG"));
+    assert!(!editor.contains("NON_EXISTENT"));
+
+    assert!(editor.has_export("APP_KEY"));
+    assert!(!editor.has_export("PORT"));
+    assert!(!editor.has_export("NON_EXISTENT"));
+
+    let keys = editor.keys();
+    assert_eq!(keys, vec!["APP_KEY", "PORT", "DEBUG"]);
+}
+
+#[test]
+fn test_global_env_lifecycle() {
+    let mut raw_map = std::collections::HashMap::new();
+    raw_map.insert("GLOBAL_PORT".to_string(), "9000".to_string());
+    raw_map.insert("GLOBAL_HOST".to_string(), "0.0.0.0".to_string());
+
+    let env = poribesh::Env::rules()
+        .rule("GLOBAL_PORT", Rule::port())
+        .rule("GLOBAL_HOST", Rule::string())
+        .validate(&raw_map)
+        .unwrap();
+
+    let initialized = poribesh::init_if_unset(env);
+    assert_eq!(initialized.get_raw("GLOBAL_HOST"), Some("0.0.0.0"));
+
+    let current = poribesh::current().unwrap();
+    assert_eq!(current.get_raw("GLOBAL_HOST"), Some("0.0.0.0"));
+
+    assert_eq!(poribesh::get::<u16>("GLOBAL_PORT").unwrap(), &9000);
+    assert_eq!(poribesh::get_raw("GLOBAL_HOST").unwrap(), "0.0.0.0");
+    assert!(poribesh::contains("GLOBAL_PORT"));
+    assert!(!poribesh::contains("NOT_IN_GLOBAL"));
+    assert!(poribesh::get_raw("NON_EXISTENT_KEY").is_err());
+
+    // Attempting a second explicit init should fail
+    let duplicate_env = poribesh::Env::rules().validate(&raw_map).unwrap();
+    let err = poribesh::init(duplicate_env);
+    assert!(err.is_err());
+    assert!(format!("{}", EnvError::AlreadyInitialized).contains("already been initialized"));
+    assert!(format!("{}", EnvError::NotInitialized).contains("not been initialized"));
+}
+
+poribesh::env_schema! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct TestConfig {
+        pub port: u16 = Rule::port().default_value(4000),
+        pub host: String = Rule::string().default_value("127.0.0.1".to_string()),
+        pub secret_token: Secret<String> = Rule::secret(Rule::string().min_length(8)),
+    }
+}
+
+#[test]
+fn test_env_schema_macro() {
+    let mut raw_map = std::collections::HashMap::new();
+    raw_map.insert("PORT".to_string(), "5000".to_string());
+    raw_map.insert("HOST".to_string(), "localhost".to_string());
+    raw_map.insert(
+        "SECRET_TOKEN".to_string(),
+        "my_super_secret_token".to_string(),
+    );
+
+    let env = TestConfig::validator().validate(&raw_map).unwrap();
+    let config = TestConfig::from_env(&env).unwrap();
+
+    assert_eq!(config.port, 5000);
+    assert_eq!(config.host, "localhost");
+    assert_eq!(config.secret_token.expose_secret(), "my_super_secret_token");
+
+    // Test with missing secret token failing validation
+    let mut invalid_map = std::collections::HashMap::new();
+    invalid_map.insert("SECRET_TOKEN".to_string(), "short".to_string());
+    let err = TestConfig::validator().validate(&invalid_map);
+    assert!(err.is_err());
+
+    let temp_dir = std::env::temp_dir().join("poribesh_test_macro_loader");
+    drop(fs::remove_dir_all(&temp_dir));
+    fs::create_dir_all(&temp_dir).unwrap();
+    fs::write(
+        temp_dir.join(".env"),
+        "SECRET_TOKEN=my_secret_token_123\nPORT=7000\n",
+    )
+    .unwrap();
+
+    let loader = poribesh::EnvLoader::new().with_base_dir(&temp_dir);
+    let loaded = TestConfig::load_with_loader(&loader).unwrap();
+    assert_eq!(loaded.port, 7000);
+    assert_eq!(loaded.host, "127.0.0.1");
+    assert_eq!(loaded.secret_token.expose_secret(), "my_secret_token_123");
+
+    fs::remove_dir_all(&temp_dir).unwrap();
+
+    poribesh::env_schema! {
+        pub struct DefaultConfig {
+            pub port: u16 = Rule::port().default_value(8080),
+        }
+    }
+
+    let default_cfg = DefaultConfig::load().unwrap();
+    assert_eq!(default_cfg.port, 8080);
+}
+
+#[cfg(feature = "jachai")]
+#[test]
+fn test_jachai_rule_integration() {
+    let mut raw_map = std::collections::HashMap::new();
+    raw_map.insert("USER_EMAIL".to_string(), "test@example.com".to_string());
+    raw_map.insert("BAD_EMAIL".to_string(), "not-an-email".to_string());
+    raw_map.insert(
+        "TRACE_ID".to_string(),
+        "550e8400-e29b-41d4-a716-446655440000".to_string(),
+    );
+    raw_map.insert("BAD_UUID".to_string(), "not-a-uuid".to_string());
+    raw_map.insert("SERVER_IP".to_string(), "192.168.1.1".to_string());
+    raw_map.insert("BAD_IP".to_string(), "999.999.999.999".to_string());
+
+    let email_rule = Rule::jachai(jachai::string().email());
+    assert!(email_rule.validate("USER_EMAIL", &raw_map).is_ok());
+    assert!(email_rule.validate("BAD_EMAIL", &raw_map).is_err());
+
+    let uuid_rule = Rule::jachai(jachai::string().uuid());
+    assert!(uuid_rule.validate("TRACE_ID", &raw_map).is_ok());
+    assert!(uuid_rule.validate("BAD_UUID", &raw_map).is_err());
+
+    let ip_rule = Rule::jachai(jachai::string().ipv4());
+    assert!(ip_rule.validate("SERVER_IP", &raw_map).is_ok());
+    assert!(ip_rule.validate("BAD_IP", &raw_map).is_err());
+
+    // Test missing key error
+    assert!(email_rule.validate("MISSING_KEY", &raw_map).is_err());
 }

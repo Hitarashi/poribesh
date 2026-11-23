@@ -248,6 +248,47 @@ impl EnvEditor {
         None
     }
 
+    /// Checks whether an environment variable exists in the editor.
+    pub fn contains(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
+
+    /// Checks whether an entry has an `export ` prefix.
+    pub fn has_export(&self, key: &str) -> bool {
+        for line in &self.lines {
+            if let EditorLine::Entry {
+                key: entry_key,
+                has_export,
+                ..
+            } = line
+                && entry_key == key
+            {
+                return *has_export;
+            }
+        }
+        false
+    }
+
+    /// Returns a list of all variable keys present in the editor.
+    pub fn keys(&self) -> Vec<&str> {
+        let mut result = Vec::new();
+        for line in &self.lines {
+            if let EditorLine::Entry { key, .. } = line {
+                result.push(key.as_str());
+            }
+        }
+        result
+    }
+
+    /// Checks whether the editor contains any lines or entries.
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+            || self
+                .lines
+                .iter()
+                .all(|line| matches!(line, EditorLine::Empty))
+    }
+
     /// Sets or updates a variable. Preserves line position if already present.
     pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
         let key_str = key.into();

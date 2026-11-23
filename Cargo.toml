@@ -12,13 +12,29 @@ categories = ["config", "development-tools"]
 
 [features]
 default = ["regex", "serde"]
+jachai = ["dep:jachai", "dep:serde_json"]
 regex = ["dep:regex"]
 serde = ["dep:serde"]
 
 [dependencies]
+jachai = { version = "0.1.0", git = "https://github.com/Hitarashi/jachai.git", branch = "main", default-features = false, features = [
+    "schema-string",
+    "schema-number",
+    "schema-boolean",
+    "schema-network",
+    "coercion",
+], optional = true }
 regex = { version = "1.13.2", default-features = false, features = ["std", "perf"], optional = true }
 serde = { version = "1.0.229", default-features = false, features = ["std", "derive"], optional = true }
+serde_json = { version = "1.0.154", default-features = false, features = ["alloc"], optional = true }
 
 [dev-dependencies]
+jachai = { version = "0.1.0", git = "https://github.com/Hitarashi/jachai.git", branch = "main", default-features = false, features = [
+    "schema-string",
+    "schema-number",
+    "schema-boolean",
+    "schema-network",
+    "coercion",
+] }
 serde = { version = "1.0.229", default-features = false, features = ["std", "derive"] }
 serde_json = "1.0.154"

@@ -1,6 +1,60 @@
-use std::{any::Any, collections::HashMap, fmt};
+use std::{any::Any, collections::HashMap, fmt, sync::OnceLock};
 
 use crate::error::EnvError;
+
+static GLOBAL_ENV: OnceLock<Env> = OnceLock::new();
+
+/// Initializes the global environment store.
+///
+/// # Errors
+/// Returns `EnvError::AlreadyInitialized` if the global store has already been initialized.
+pub fn init(env: Env) -> Result<&'static Env, EnvError> {
+    GLOBAL_ENV
+        .set(env)
+        .map_err(|_| EnvError::AlreadyInitialized)?;
+    Ok(GLOBAL_ENV.get().expect("global env initialized"))
+}
+
+/// Initializes the global environment store if it has not already been set.
+/// Returns a reference to the global store.
+pub fn init_if_unset(env: Env) -> &'static Env {
+    let _ = GLOBAL_ENV.set(env);
+    GLOBAL_ENV.get().expect("global env initialized")
+}
+
+/// Retrieves a reference to the globally initialized `Env` container.
+///
+/// # Errors
+/// Returns `EnvError::NotInitialized` if the global store has not been initialized.
+pub fn current() -> Result<&'static Env, EnvError> {
+    GLOBAL_ENV.get().ok_or(EnvError::NotInitialized)
+}
+
+/// Retrieves a typed reference to a validated variable from the global environment store.
+///
+/// # Errors
+/// Returns `EnvError::NotInitialized` if the global store has not been initialized.
+/// Returns `EnvError::NotFound` if the key does not exist.
+/// Returns `EnvError::TypeMismatch` if the key cannot be downcast to `T`.
+pub fn get<T: 'static>(key: &str) -> Result<&'static T, EnvError> {
+    current()?.get::<T>(key)
+}
+
+/// Retrieves the raw string representation of a variable from the global environment store.
+///
+/// # Errors
+/// Returns `EnvError::NotInitialized` if the global store has not been initialized.
+/// Returns `EnvError::NotFound` if the key does not exist.
+pub fn get_raw(key: &str) -> Result<&'static str, EnvError> {
+    current()?.get_raw(key).ok_or_else(|| EnvError::NotFound {
+        key: key.to_string(),
+    })
+}
+
+/// Checks whether a variable exists in the global environment store.
+pub fn contains(key: &str) -> bool {
+    current().map(|env| env.contains(key)).unwrap_or(false)
+}
 
 /// An immutable, thread-safe container holding validated typed environment variables.
 pub struct Env {
