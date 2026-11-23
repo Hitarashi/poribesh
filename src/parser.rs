@@ -157,6 +157,12 @@ impl EnvParser {
         mut line_index: usize,
         entry_line_number: usize,
     ) -> Result<(String, usize), EnvError> {
+        if !slice.contains('\\') {
+            if let Some(closing_pos) = slice.find('"') {
+                return Ok((slice[..closing_pos].to_string(), line_index));
+            }
+        }
+
         let mut accumulated = String::new();
         let mut in_escape = false;
 
@@ -200,19 +206,14 @@ impl EnvParser {
     }
 
     fn parse_unquoted(slice: &str) -> String {
-        let mut result = String::new();
-        let chars: Vec<char> = slice.chars().collect();
-        let mut index = 0;
-
-        while index < chars.len() {
-            let ch = chars[index];
-            if ch == '#' && (index == 0 || chars[index - 1].is_whitespace()) {
+        let bytes = slice.as_bytes();
+        let mut end = bytes.len();
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'#' && (i == 0 || bytes[i - 1].is_ascii_whitespace()) {
+                end = i;
                 break;
             }
-            result.push(ch);
-            index += 1;
         }
-
-        result.trim().to_string()
+        slice[..end].trim().to_string()
     }
 }

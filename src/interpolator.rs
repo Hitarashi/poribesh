@@ -25,78 +25,84 @@ impl EnvInterpolator {
         map: &HashMap<String, String>,
     ) -> Result<HashMap<String, String>, EnvError> {
         let mut resolved = HashMap::with_capacity(map.len());
-        let mut cache = HashMap::new();
+        let mut stack = Vec::with_capacity(8);
 
         for key in map.keys() {
-            let mut stack = Vec::new();
-            let value = self.resolve_variable(key, map, &mut stack, &mut cache)?;
-            resolved.insert(key.clone(), value);
+            stack.clear();
+            self.resolve_variable(key.as_str(), map, &mut stack, &mut resolved)?;
         }
 
         Ok(resolved)
     }
 
-    fn resolve_variable(
+    fn resolve_variable<'a>(
         &self,
-        key: &str,
-        map: &HashMap<String, String>,
-        stack: &mut Vec<String>,
-        cache: &mut HashMap<String, String>,
-    ) -> Result<String, EnvError> {
-        if let Some(cached_value) = cache.get(key) {
-            return Ok(cached_value.clone());
+        key: &'a str,
+        map: &'a HashMap<String, String>,
+        stack: &mut Vec<&'a str>,
+        resolved: &mut HashMap<String, String>,
+    ) -> Result<(), EnvError> {
+        if resolved.contains_key(key) {
+            return Ok(());
         }
 
-        if stack.contains(&key.to_string()) {
-            let mut cycle = stack.clone();
+        if stack.contains(&key) {
+            let mut cycle: Vec<String> = stack.iter().map(|s| (*s).to_string()).collect();
             cycle.push(key.to_string());
             return Err(EnvError::CyclicDependency { cycle });
         }
 
-        stack.push(key.to_string());
+        stack.push(key);
 
-        let raw_value = match map.get(key) {
-            Some(value) => value.clone(),
+        let expanded = match map.get(key) {
+            Some(value) => self.expand_string(value, map, stack, resolved)?,
             None => std::env::var(key).unwrap_or_default(),
         };
 
-        let expanded = self.expand_string(&raw_value, map, stack, cache)?;
         let processed = self.process_resolvers(key, expanded, &self.base_path)?;
 
         stack.pop();
-        cache.insert(key.to_string(), processed.clone());
-        Ok(processed)
+        resolved.insert(key.to_string(), processed);
+        Ok(())
     }
 
-    fn expand_string(
+    fn expand_string<'a>(
         &self,
-        input: &str,
-        map: &HashMap<String, String>,
-        stack: &mut Vec<String>,
-        cache: &mut HashMap<String, String>,
+        input: &'a str,
+        map: &'a HashMap<String, String>,
+        stack: &mut Vec<&'a str>,
+        resolved: &mut HashMap<String, String>,
     ) -> Result<String, EnvError> {
-        let mut result = String::new();
-        let chars: Vec<char> = input.chars().collect();
-        let mut index = 0;
+        if !input.contains('$') {
+            return Ok(input.to_string());
+        }
 
-        while index < chars.len() {
-            if chars[index] == '\\' && index + 1 < chars.len() && chars[index + 1] == '$' {
+        let bytes = input.as_bytes();
+        let len = bytes.len();
+        let mut result = String::with_capacity(len);
+        let mut index = 0;
+        let mut last_copied = 0;
+
+        while index < len {
+            if bytes[index] == b'\\' && index + 1 < len && bytes[index + 1] == b'$' {
+                result.push_str(&input[last_copied..index]);
                 result.push('$');
                 index += 2;
+                last_copied = index;
                 continue;
             }
 
-            if chars[index] == '$' {
-                if index + 1 < chars.len() && chars[index + 1] == '{' {
+            if bytes[index] == b'$' {
+                if index + 1 < len && bytes[index + 1] == b'{' {
                     let start_brace = index + 2;
                     let mut end_brace = None;
                     let mut depth = 1;
                     let mut scan_index = start_brace;
 
-                    while scan_index < chars.len() {
-                        if chars[scan_index] == '{' {
+                    while scan_index < len {
+                        if bytes[scan_index] == b'{' {
                             depth += 1;
-                        } else if chars[scan_index] == '}' {
+                        } else if bytes[scan_index] == b'}' {
                             depth -= 1;
                             if depth == 0 {
                                 end_brace = Some(scan_index);
@@ -107,50 +113,67 @@ impl EnvInterpolator {
                     }
 
                     if let Some(close_pos) = end_brace {
-                        let inner: String = chars[start_brace..close_pos].iter().collect();
+                        result.push_str(&input[last_copied..index]);
+                        let inner = &input[start_brace..close_pos];
                         index = close_pos + 1;
+                        last_copied = index;
 
                         if let Some(separator_pos) = inner.find(":-") {
                             let var_name = inner[..separator_pos].trim();
                             let fallback_raw = &inner[separator_pos + 2..];
 
-                            let value = self.resolve_variable(var_name, map, stack, cache)?;
+                            let value = if stack.contains(&var_name) {
+                                std::env::var(var_name).unwrap_or_default()
+                            } else {
+                                self.resolve_variable(var_name, map, stack, resolved)?;
+                                resolved.get(var_name).cloned().unwrap_or_default()
+                            };
+
                             if !value.is_empty() {
                                 result.push_str(&value);
                             } else {
                                 let fallback_expanded =
-                                    self.expand_string(fallback_raw, map, stack, cache)?;
+                                    self.expand_string(fallback_raw, map, stack, resolved)?;
                                 result.push_str(&fallback_expanded);
                             }
                         } else {
                             let var_name = inner.trim();
-                            let value = self.resolve_variable(var_name, map, stack, cache)?;
-                            result.push_str(&value);
+                            self.resolve_variable(var_name, map, stack, resolved)?;
+                            if let Some(val) = resolved.get(var_name) {
+                                result.push_str(val);
+                            }
                         }
                         continue;
                     }
-                } else if index + 1 < chars.len()
-                    && (chars[index + 1].is_ascii_alphabetic() || chars[index + 1] == '_')
+                } else if index + 1 < len
+                    && (bytes[index + 1].is_ascii_alphabetic() || bytes[index + 1] == b'_')
                 {
+                    result.push_str(&input[last_copied..index]);
                     let start_var = index + 1;
                     let mut end_var = start_var;
-                    while end_var < chars.len()
-                        && (chars[end_var].is_ascii_alphanumeric() || chars[end_var] == '_')
+                    while end_var < len
+                        && (bytes[end_var].is_ascii_alphanumeric() || bytes[end_var] == b'_')
                     {
                         end_var += 1;
                     }
 
-                    let var_name: String = chars[start_var..end_var].iter().collect();
+                    let var_name = &input[start_var..end_var];
                     index = end_var;
+                    last_copied = index;
 
-                    let value = self.resolve_variable(&var_name, map, stack, cache)?;
-                    result.push_str(&value);
+                    self.resolve_variable(var_name, map, stack, resolved)?;
+                    if let Some(val) = resolved.get(var_name) {
+                        result.push_str(val);
+                    }
                     continue;
                 }
             }
 
-            result.push(chars[index]);
             index += 1;
+        }
+
+        if last_copied < len {
+            result.push_str(&input[last_copied..]);
         }
 
         Ok(result)

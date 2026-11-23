@@ -3,3 +3,6 @@
 .idea
 
 *.proptest-regressions
+
+data
+node_modules

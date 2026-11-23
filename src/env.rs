@@ -1,4 +1,9 @@
-use std::{any::Any, collections::HashMap, fmt, sync::OnceLock};
+use std::{
+    any::Any,
+    collections::HashMap,
+    fmt,
+    sync::{Arc, OnceLock},
+};
 
 use crate::error::EnvError;
 
@@ -58,7 +63,7 @@ pub fn contains(key: &str) -> bool {
 
 /// An immutable, thread-safe container holding validated typed environment variables.
 pub struct Env {
-    raw_values: HashMap<String, String>,
+    raw_values: Arc<HashMap<String, String>>,
     typed_values: HashMap<String, Box<dyn Any + Send + Sync>>,
 }
 
@@ -73,11 +78,11 @@ impl fmt::Debug for Env {
 impl Env {
     /// Constructs a new `Env` instance with the given raw and typed mappings.
     pub fn new(
-        raw_values: HashMap<String, String>,
+        raw_values: impl Into<Arc<HashMap<String, String>>>,
         typed_values: HashMap<String, Box<dyn Any + Send + Sync>>,
     ) -> Self {
         Self {
-            raw_values,
+            raw_values: raw_values.into(),
             typed_values,
         }
     }
@@ -124,7 +129,7 @@ impl Env {
     /// This method must only be called during early single-threaded application bootstrap before
     /// any worker threads or async runtimes have been spawned.
     pub unsafe fn export_to_process(&self) {
-        for (key, value) in &self.raw_values {
+        for (key, value) in self.raw_values.iter() {
             // Safety: caller guarantees single-threaded boot phase
             unsafe {
                 std::env::set_var(key, value);

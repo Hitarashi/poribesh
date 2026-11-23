@@ -1,0 +1,157 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@adonisjs/env':
+        specifier: ^5.0.0
+        version: 5.0.1
+      dotenv:
+        specifier: ^16.4.7
+        version: 16.6.1
+      dotenv-expand:
+        specifier: ^12.0.1
+        version: 12.0.3
+      envalid:
+        specifier: ^8.0.0
+        version: 8.2.0
+
+packages:
+
+  '@adonisjs/env@5.0.1':
+    resolution: {integrity: sha512-jka5D+LHjG0Cuy1IpuOv7NfO5Pu4SZ41UzX5csPeXzBIWyuD9as+HphxctHZpsD2KZ97EuSbVJv6zzxJfZ4Edg==}
+    engines: {node: '>=18.16.0'}
+
+  '@poppinss/exception@1.2.3':
+    resolution: {integrity: sha512-dCED+QRChTVatE9ibtoaxc+WkdzOSjYTKi/+uacHWIsfodVfpsueo3+DKpgU5Px8qXjgmXkSvhXvSCz3fnP9lw==}
+
+  '@poppinss/object-builder@1.1.0':
+    resolution: {integrity: sha512-FOrOq52l7u8goR5yncX14+k+Ewi5djnrt1JwXeS/FvnwAPOiveFhiczCDuvXdssAwamtrV2hp5Rw9v+n2T7hQg==}
+    engines: {node: '>=20.6.0'}
+
+  '@poppinss/string@1.7.2':
+    resolution: {integrity: sha512-A182GLDfi36iDCbhDrHB0xzrPM1fO3GHnhCDIdadf8C6eycgct4m7zusbLwEh6GPaj2Pz5BVos7XK16w7tZ7wQ==}
+
+  '@poppinss/utils@6.10.1':
+    resolution: {integrity: sha512-da+MMyeXhBaKtxQiWPfy7+056wk3lVIhioJnXHXkJ2/OHDaZfFcyKHNl1R06sdYO8lIRXcXdoZ6LO2ARmkAREA==}
+    engines: {node: '>=18.16.0'}
+
+  '@poppinss/validator-lite@1.0.3':
+    resolution: {integrity: sha512-u4dmT7PDHwNtxY3q1jHVp/u+hMEEcBlkzd37QwwM4tVt/0mLlEDttSfPQ+TT7sqPG4VEtWKwVSlMInwPUYyJpA==}
+
+  '@types/pluralize@0.0.33':
+    resolution: {integrity: sha512-JOqsl+ZoCpP4e8TDke9W79FDcSgPAR0l6pixx2JHkhnRjvShyYiAYw2LVsnA7K08Y6DeOnaU6ujmENO4os/cYg==}
+
+  case-anything@3.1.7:
+    resolution: {integrity: sha512-52UPzAJDZgxaNsYK4kvmov1kVaAfPc+OU2j0OSUZWbdWMuJd7Axi94XWSfSuafMd7K9avhsEnU6W6rXJdAd+Ug==}
+    engines: {node: '>=18'}
+
+  dotenv-expand@12.0.3:
+    resolution: {integrity: sha512-uc47g4b+4k/M/SeaW1y4OApx+mtLWl92l5LMPP0GNXctZqELk+YGgOPIIC5elYmUH4OuoK3JLhuRUYegeySiFA==}
+    engines: {node: '>=12'}
+
+  dotenv@16.6.1:
+    resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
+    engines: {node: '>=12'}
+
+  envalid@8.2.0:
+    resolution: {integrity: sha512-CkPvea95dwMYE1wnKX5mQXkOpiMs9O+ncv8NqZy+gW7FuzpUp06KTdUHb18xFG8CqQHmfmRqGLF5DuGaBWNrSw==}
+    engines: {node: '>=18'}
+
+  flattie@1.1.1:
+    resolution: {integrity: sha512-9UbaD6XdAL97+k/n+N7JwX46K/M6Zc6KcFYskrYL8wbBV/Uyk0CTAMY0VT+qiK5PM7AIc9aTWYtq65U7T+aCNQ==}
+    engines: {node: '>=8'}
+
+  pluralize@8.0.0:
+    resolution: {integrity: sha512-Nc3IT5yHzflTfbjgqWcCPpo7DaKy4FnpB0l/zCAW0Tc7jxAiuqSxHasntB3D7887LSrA93kDJ9IXovxJYxyLCA==}
+    engines: {node: '>=4'}
+
+  safe-stable-stringify@2.5.0:
+    resolution: {integrity: sha512-b3rppTKm9T+PsVCBEOUR46GWI7fdOs00VKZ1+9c1EWDaDMvjQc6tUwuFyIprgGgTcWoVHSKrU8H31ZHA2e0RHA==}
+    engines: {node: '>=10'}
+
+  secure-json-parse@4.1.1:
+    resolution: {integrity: sha512-lnd81MQEZKjhW/Gd2TQqdd4XP6QYNdDW/EP+I7nTrFHP9y2LmaGPIHk9xsnzcOiEr1c39c/e84xFgGviQKBTRw==}
+
+  slugify@1.6.9:
+    resolution: {integrity: sha512-vZ7rfeehZui7wQs438JXBckYLkIIdfHOXsaVEUMyS5fHo1483l1bMdo0EDSWYclY0yZKFOipDy4KHuKs6ssvdg==}
+    engines: {node: '>=8.0.0'}
+
+  split-lines@3.0.0:
+    resolution: {integrity: sha512-d0TpRBL/VfKDXsk8JxPF7zgF5pCUDdBMSlEL36xBgVeaX448t+yGXcJaikUyzkoKOJ0l6KpMfygzJU9naIuivw==}
+    engines: {node: '>=12'}
+
+  tslib@2.8.1:
+    resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
+
+  validator@13.15.35:
+    resolution: {integrity: sha512-TQ5pAGhd5whStmqWvYF4OjQROlmv9SMFVt37qoCBdqRffuuklWYQlCNnEs2ZaIBD1kZRNnikiZOS1eqgkar0iw==}
+    engines: {node: '>= 0.10'}
+
+snapshots:
+
+  '@adonisjs/env@5.0.1':
+    dependencies:
+      '@poppinss/utils': 6.10.1
+      '@poppinss/validator-lite': 1.0.3
+      dotenv: 16.6.1
+      split-lines: 3.0.0
+
+  '@poppinss/exception@1.2.3': {}
+
+  '@poppinss/object-builder@1.1.0': {}
+
+  '@poppinss/string@1.7.2':
+    dependencies:
+      '@types/pluralize': 0.0.33
+      case-anything: 3.1.7
+      pluralize: 8.0.0
+      slugify: 1.6.9
+
+  '@poppinss/utils@6.10.1':
+    dependencies:
+      '@poppinss/exception': 1.2.3
+      '@poppinss/object-builder': 1.1.0
+      '@poppinss/string': 1.7.2
+      flattie: 1.1.1
+      safe-stable-stringify: 2.5.0
+      secure-json-parse: 4.1.1
+
+  '@poppinss/validator-lite@1.0.3':
+    dependencies:
+      validator: 13.15.35
+
+  '@types/pluralize@0.0.33': {}
+
+  case-anything@3.1.7: {}
+
+  dotenv-expand@12.0.3:
+    dependencies:
+      dotenv: 16.6.1
+
+  dotenv@16.6.1: {}
+
+  envalid@8.2.0:
+    dependencies:
+      tslib: 2.8.1
+
+  flattie@1.1.1: {}
+
+  pluralize@8.0.0: {}
+
+  safe-stable-stringify@2.5.0: {}
+
+  secure-json-parse@4.1.1: {}
+
+  slugify@1.6.9: {}
+
+  split-lines@3.0.0: {}
+
+  tslib@2.8.1: {}
+
+  validator@13.15.35: {}

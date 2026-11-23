@@ -82,6 +82,17 @@ VAR_C=${VAR_A}
 }
 
 #[test]
+fn test_self_referential_fallback_interpolation() {
+    let input = r#"
+FALLBACK_PORT=${FALLBACK_PORT:-3000}
+FALLBACK_METRICS=${FALLBACK_METRICS:-9090}
+"#;
+    let map = EnvLoader::new().load_from_str(input).unwrap();
+    assert_eq!(map.get("FALLBACK_PORT").unwrap(), "3000");
+    assert_eq!(map.get("FALLBACK_METRICS").unwrap(), "9090");
+}
+
+#[test]
 fn test_file_resolver() {
     let temp_dir = std::env::temp_dir().join("poribesh_test_secret");
     fs::create_dir_all(&temp_dir).unwrap();
@@ -1351,7 +1362,7 @@ fn test_global_env_lifecycle() {
     raw_map.insert("GLOBAL_PORT".to_string(), "9000".to_string());
     raw_map.insert("GLOBAL_HOST".to_string(), "0.0.0.0".to_string());
 
-    let env = poribesh::Env::rules()
+    let env = Env::rules()
         .rule("GLOBAL_PORT", Rule::port())
         .rule("GLOBAL_HOST", Rule::string())
         .validate(&raw_map)
@@ -1370,7 +1381,7 @@ fn test_global_env_lifecycle() {
     assert!(poribesh::get_raw("NON_EXISTENT_KEY").is_err());
 
     // Attempting a second explicit init should fail
-    let duplicate_env = poribesh::Env::rules().validate(&raw_map).unwrap();
+    let duplicate_env = Env::rules().validate(&raw_map).unwrap();
     let err = poribesh::init(duplicate_env);
     assert!(err.is_err());
     assert!(format!("{}", EnvError::AlreadyInitialized).contains("already been initialized"));
@@ -1418,7 +1429,7 @@ fn test_env_schema_macro() {
     )
     .unwrap();
 
-    let loader = poribesh::EnvLoader::new().with_base_dir(&temp_dir);
+    let loader = EnvLoader::new().with_base_dir(&temp_dir);
     let loaded = TestConfig::load_with_loader(&loader).unwrap();
     assert_eq!(loaded.port, 7000);
     assert_eq!(loaded.host, "127.0.0.1");
